@@ -440,6 +440,7 @@ if __name__ == '__main__':
         output = rag(args.query, db)
         print(output)
 
+
     else:
         import readline
         while True:
