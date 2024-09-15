@@ -24,7 +24,15 @@ jobs:
       - name: install dependencies
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install ./metahtml
+      - name: Clone and set up metahtml
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/mikeizbicki/metahtml
+          cd metahtml
+          git sparse-checkout init
+          git sparse-checkout set '!/tests/.cache' '/*'
+          git checkout master
+          pip install .
+          cd ..
       - name: test declaration
         run: |
           python3 ragnews.py --query "Who is the current democratic presidential nominee"
