@@ -22,7 +22,7 @@ from groq import Groq
 import os
 
 
-################################################################################
+#############extract_keywords('Who is the current democratic presidential nominee?', seed=0)###################################################################
 # LLM functions
 ################################################################################
 
@@ -31,7 +31,7 @@ client = Groq(
 )
 
 
-def run_llm(system, user, model='llama3-8b-8192', seed=None):
+def run_llm(system, user, model='llama-3.1-8b-instant', seed=None):
     '''
     This is a helper function for all the uses of LLMs in this file.
     '''
@@ -55,6 +55,7 @@ def run_llm(system, user, model='llama3-8b-8192', seed=None):
 def summarize_text(text, seed=None):
     system = 'Summarize the input text below.  Limit the summary to 1 paragraph.  Use an advanced reading level similar to the input text, and ensure that all people, places, and other proper and dates nouns are included in the summary.  The summary should be in English.'
     return run_llm(system, text, seed=seed)
+
 
 
 def translate_text(text):
@@ -83,6 +84,26 @@ def extract_keywords(text, seed=None):
     # You probably certainly won't because you probably won't come up with the exact same prompt as me.
     # To make the test cases above pass,
     # you'll have to modify them to be what the output of your prompt provides.
+    system = '''
+    Extract the most important keywords from the input text. Focus on key topics, people, entities, and policies without any unnecessary text.
+
+    1. Only return the keywords as a single string, separated by spaces.
+    2. Do not include any extra text like "Here are the keywords".
+    3. Only extract the key terms relevant to the query, without stopwords.
+
+    Example:
+
+    Input: 'Who is the current democratic presidential nominee?'
+    Output: 'Joe candidate nominee presidential Democrat election primary TBD voting politics'
+
+    Input: 'What is the policy position of Trump related to illegal Mexican immigrants?'
+    Output: 'Trump Mexican immigrants policy position illegal border control deportation walls'
+
+    Now, extract the keywords from this input:
+    I repeat only return keywords nothing in addition to it
+    '''
+
+    return run_llm(system, text, seed=seed)
 
 
 ################################################################################
@@ -140,6 +161,33 @@ def rag(text, db):
     # You can start with a basic system prompt right away just to check if things are working,
     # but don't spend a lot of time on the system prompt until you're sure everything else is working.
     # Then, you can iteratively add more commands into the system prompt to correct "bad" behavior you see in your program's output.
+    # Step 1: Extract keywords from the input text
+    keywords = extract_keywords(text)
+    #keywords = re.findall(r"'(.*?)'", keywords)
+    print('keywords:', keywords)
+
+    # Step 2: Query the database for articles using the extracted keywords
+    relevant_articles = db.find_articles(keywords)
+    #print('relevant_articles:', relevant_articles)
+    #for article in relevant_articles:
+    #    print('relevant_articles:', article['title'])
+
+    # Step 3: Construct a new prompt with the original text and relevant articles
+    article_summaries = "\n\n".join([article['en_summary'] for article in relevant_articles])
+
+    new_prompt = f'''
+    You excel at delivering concise responses based on information from article summaries. Below is the user's query, followed by relevant article summaries. Answer the query directly using only the information from the article summaries, focusing solely on what's available. If the information isn't immediately clear, analyze the summaries again. Always provide an answer based on the data given, and never respond with phrases like "The article summaries do not mention the current Democratic presidential nominee."
+    User Query: "{text}"
+
+    Relevant Articles:
+    {article_summaries}
+
+    '''
+
+    # Step 4: Pass the new prompt to the LLM and return the generated response
+    response = run_llm(system=new_prompt, user=text, seed = 1)
+
+    return response
 
 
 class ArticleDB:
@@ -170,10 +218,7 @@ class ArticleDB:
     ['rowid', 'rank', 'title', 'publish_date', 'hostname', 'url', 'staleness', 'timebias', 'en_summary', 'text']
     '''
 
-    _TESTURLS = [
-        'https://elpais.com/economia/2024-09-06/la-creacion-de-empleo-defrauda-en-estados-unidos-en-agosto-y-aviva-el-fantasma-de-la-recesion.html',
-        'https://www.cnn.com/2024/09/06/politics/american-push-israel-hamas-deal-analysis/index.html',
-        ]
+    _TESTURLS = ['https://elpais.com/economia/2024-09-06/la-creacion-de-empleo-defrauda-en-estados-unidos-en-agosto-y-aviva-el-fantasma-de-la-recesion.html', 'https://www.cnn.com/2024/09/06/politics/american-push-israel-hamas-deal-analysis/index.html']
 
     def __init__(self, filename=':memory:'):
         self.db = sqlite3.connect(filename)
@@ -235,6 +280,30 @@ class ArticleDB:
         # The details of the SELECT statement will be different
         # (because the functions collect different information)
         # but the outline of the python code is the same.
+        #if isinstance(query, list):
+        #    query = ' '.join(query)
+        if isinstance(query, str):
+            query_words = query.split()
+            query = ' OR '.join(query_words)
+
+        query = query.replace("'", "''")
+        print('query:', query)
+
+        sql = '''
+            SELECT rowid, rank, title, publish_date, hostname, url, en_summary, text
+            FROM articles
+            WHERE articles MATCH ?
+            ORDER BY rank DESC
+            LIMIT ?
+        '''
+
+        # Execute the query
+        result = self.db.execute(sql, (query, limit)).fetchall()
+
+        # Convert the result rows to dictionaries
+        articles = [dict(row) for row in result]
+
+        return articles
 
     @_catch_errors
     def add_url(self, url, recursive_depth=0, allow_dupes=False):
@@ -353,6 +422,7 @@ if __name__ == '__main__':
     parser.add_argument('--db', default='ragnews.db')
     parser.add_argument('--recursive_depth', default=0, type=int)
     parser.add_argument('--add_url', help='If this parameter is added, then the program will not provide an interactive QA session with the database.  Instead, the provided url will be downloaded and added to the database.')
+    parser.add_argument('--query', help='Provide a query to avoid the interactive session and get an immediate response.')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -365,6 +435,10 @@ if __name__ == '__main__':
 
     if args.add_url:
         db.add_url(args.add_url, recursive_depth=args.recursive_depth, allow_dupes=True)
+
+    elif args.query:
+        output = rag(args.query, db)
+        print(output)
 
     else:
         import readline
