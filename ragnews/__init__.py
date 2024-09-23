@@ -20,6 +20,7 @@ import metahtml
 
 from groq import Groq
 import os
+import openai
 
 
 #############extract_keywords('Who is the current democratic presidential nominee?', seed=0)###################################################################
@@ -29,13 +30,13 @@ import os
 client = Groq(
     api_key=os.environ.get("GROQ_API_KEY"),
 )
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-
-def run_llm(system, user, model='llama-3.1-8b-instant', seed=None):
+def run_llm(system, user, model='gpt-4o', seed=None):
     '''
     This is a helper function for all the uses of LLMs in this file.
     '''
-    chat_completion = client.chat.completions.create(
+    chat_completion = openai.chat.completions.create(
         messages=[
             {
                 'role': 'system',
@@ -85,7 +86,7 @@ def extract_keywords(text, seed=None):
     # To make the test cases above pass,
     # you'll have to modify them to be what the output of your prompt provides.
     system = '''
-    Extract the most important keywords from the input text. Focus on key topics, people, entities, and policies without any unnecessary text.
+    Extract the most important keywords from the input text. Focus on key topics, people, entities, and policies without any unnecessary text. The keywords should be returned as a space-separated string, and should exclude stopwords or any unnecessary information.
 
     1. Only return the keywords as a single string, separated by spaces.
     2. Do not include any extra text like "Here are the keywords".
@@ -100,7 +101,7 @@ def extract_keywords(text, seed=None):
     Output: 'Trump Mexican immigrants policy position illegal border control deportation walls'
 
     Now, extract the keywords from this input:
-    I repeat only return keywords nothing in addition to it
+    I repeat only return keywords nothing in addition to it. Do not include a Note in output
     '''
 
     return run_llm(system, text, seed=seed)
@@ -135,7 +136,7 @@ def _catch_errors(func):
 ################################################################################
 
 
-def rag(text, db):
+def rag(text, db, keywords_text=None):
     '''
     This function uses retrieval augmented generation (RAG) to generate an LLM response to the input text.
     The db argument should be an instance of the `ArticleDB` class that contains the relevant documents to use.
@@ -162,18 +163,28 @@ def rag(text, db):
     # but don't spend a lot of time on the system prompt until you're sure everything else is working.
     # Then, you can iteratively add more commands into the system prompt to correct "bad" behavior you see in your program's output.
     # Step 1: Extract keywords from the input text
-    keywords = extract_keywords(text)
+    system = None
+    if keywords_text is None:
+        keywords_text = text
+    else:
+        system = text
+
+
+    keywords = extract_keywords(keywords_text)
     #keywords = re.findall(r"'(.*?)'", keywords)
     print('keywords:', keywords)
 
     # Step 2: Query the database for articles using the extracted keywords
     relevant_articles = db.find_articles(keywords)
+    print('number of relevant articles:', len(relevant_articles))
     #print('relevant_articles:', relevant_articles)
-    #for article in relevant_articles:
-    #    print('relevant_articles:', article['title'])
+    n = 0
+    for article in relevant_articles:
+        n += 1
+    print('relevant_articles:', n)
 
     # Step 3: Construct a new prompt with the original text and relevant articles
-    article_summaries = "\n\n".join([article['en_summary'] for article in relevant_articles])
+    article_summaries = "\n\n".join([article['text'] for article in relevant_articles])
 
     new_prompt = f'''
     You excel at delivering concise responses based on information from article summaries. Below is the user's query, followed by relevant article summaries. Answer the query directly using only the information from the article summaries, focusing solely on what's available. If the information isn't immediately clear, analyze the summaries again. Always provide an answer based on the data given, and never respond with phrases like "The article summaries do not mention the current Democratic presidential nominee."
@@ -181,11 +192,18 @@ def rag(text, db):
 
     Relevant Articles:
     {article_summaries}
-
     '''
 
     # Step 4: Pass the new prompt to the LLM and return the generated response
-    response = run_llm(system=new_prompt, user=text, seed = 1)
+
+    #if system:
+    #    print('system:', system)
+    #    print('question:', keywords_text)
+    #    response = run_llm(system, user=keywords_text, seed = 1)
+    #else:
+    #    response = run_llm(system=new_prompt, user=keywords_text, seed = 1)
+    #    print('system does not exist:', system)
+    response = run_llm(system=new_prompt, user=keywords_text, seed = 1)
 
     return response
 
@@ -282,23 +300,34 @@ class ArticleDB:
         # but the outline of the python code is the same.
         #if isinstance(query, list):
         #    query = ' '.join(query)
-        if isinstance(query, str):
-            query_words = query.split()
-            query = ' OR '.join(query_words)
+        # Ensure the query is a string. If it's a list, join it into a single string.
+        # Ensure the query is a string. If it's a list, join it into a single string.
+        if isinstance(query, list):
+            query = ' '.join(query)
+
+        # Split the query into words and clean out special characters that FTS5 doesn't handle well.
+        query_words = query.split()
+
+        # Remove periods or any other characters that can cause issues
+        query_words = [re.sub(r'[^\w\s]', '', word) for word in query_words]
+
+        # Rejoin the cleaned words with 'OR'
+        query = ' OR '.join(query_words)
 
         query = query.replace("'", "''")
         print('query:', query)
-
         sql = '''
             SELECT rowid, rank, title, publish_date, hostname, url, en_summary, text
             FROM articles
-            WHERE articles MATCH ?
+            WHERE text MATCH ?
             ORDER BY rank DESC
             LIMIT ?
         '''
 
-        # Execute the query
+        # Execute the query. Since it's a parameterized query, the parameters need to be passed as a tuple
         result = self.db.execute(sql, (query, limit)).fetchall()
+
+
 
         # Convert the result rows to dictionaries
         articles = [dict(row) for row in result]
