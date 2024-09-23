@@ -26,5 +26,6 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       - name: test declaration
         run: |
+          git submodule add https://github.com/mikeizbicki/hairy-trumpet
           export PYTHONPATH=.
           python3 ragnews/evaluate.py
