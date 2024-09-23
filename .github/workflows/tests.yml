@@ -17,6 +17,8 @@ jobs:
       GROQ_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v2
+        with:
+          submodules: true
       - name: Set up Python ${{matrix.python}}
         uses: actions/setup-python@v2
         with:
@@ -24,8 +26,9 @@ jobs:
       - name: install dependencies
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Update submodules
+        run: git submodule update --init --recursive
       - name: test declaration
         run: |
-          git submodule add https://github.com/mikeizbicki/hairy-trumpet
           export PYTHONPATH=.
           python3 ragnews/evaluate.py
